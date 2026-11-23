@@ -31,11 +31,18 @@ for (const [op, imm, pop, push] of [
   IMM[op] = imm; POPN[op] = pop; PSHN[op] = push; KNOWN[op] = 1;
 }
 
+// ISA limits, named so the trap checks below read as the spec, not magic numbers.
+const STACK_SIZE = 256;
+const CALL_DEPTH = 64;
+const MEM_SIZE = 256;
+const OUT_LIMIT = 65536;
+const STEP_LIMIT = 1000000;
+
 function run(p: Uint8Array, inp: Uint8Array): { out: Uint8Array; code: number } {
-  const D = new Int32Array(256);
-  const C = new Int32Array(64);
-  const M = new Int32Array(256);
-  const out = new Uint8Array(65536);
+  const D = new Int32Array(STACK_SIZE);
+  const C = new Int32Array(CALL_DEPTH);
+  const M = new Int32Array(MEM_SIZE);
+  const out = new Uint8Array(OUT_LIMIT);
   let sp = 0;
   let csp = 0;
   let olen = 0;
@@ -45,7 +52,7 @@ function run(p: Uint8Array, inp: Uint8Array): { out: Uint8Array; code: number } 
   const n = p.length;
   const done = (code: number): { out: Uint8Array; code: number } => ({ out: out.slice(0, olen), code });
   for (;;) {
-    if (steps === 1000000) return done(10);
+    if (steps === STEP_LIMIT) return done(10);
     if (pc < 0 || pc >= n) return done(9);
     const op = p[pc];
     if (!KNOWN[op]) return done(5);
@@ -54,7 +61,7 @@ function run(p: Uint8Array, inp: Uint8Array): { out: Uint8Array; code: number } 
     steps++;
     const next = pc + 1 + imm;
     if (sp < POPN[op]) return done(2);
-    if (sp - POPN[op] + PSHN[op] > 256) return done(3);
+    if (sp - POPN[op] + PSHN[op] > STACK_SIZE) return done(3);
     pc = next;
     switch (op) {
       case 0x00:
@@ -140,7 +147,7 @@ function run(p: Uint8Array, inp: Uint8Array): { out: Uint8Array; code: number } 
         break;
       }
       case 0x33:
-        if (csp === 64) return done(7);
+        if (csp === CALL_DEPTH) return done(7);
         C[csp++] = next;
         pc = p[next - 2] | (p[next - 1] << 8);
         break;
@@ -150,27 +157,27 @@ function run(p: Uint8Array, inp: Uint8Array): { out: Uint8Array; code: number } 
         break;
       case 0x40: {
         const addr = D[sp - 1];
-        if (addr < 0 || addr >= 256) return done(6);
+        if (addr < 0 || addr >= MEM_SIZE) return done(6);
         D[sp - 1] = M[addr];
         break;
       }
       case 0x41: {
         const addr = D[sp - 1];
         const v = D[sp - 2];
-        if (addr < 0 || addr >= 256) return done(6);
+        if (addr < 0 || addr >= MEM_SIZE) return done(6);
         sp -= 2;
         M[addr] = v;
         break;
       }
       case 0x50: {
         const s = String(D[sp - 1]);
-        if (olen + s.length > 65536) return done(11);
+        if (olen + s.length > OUT_LIMIT) return done(11);
         sp--;
         for (let i = 0; i < s.length; i++) out[olen++] = s.charCodeAt(i);
         break;
       }
       case 0x51:
-        if (olen + 1 > 65536) return done(11);
+        if (olen + 1 > OUT_LIMIT) return done(11);
         out[olen++] = D[--sp] & 255;
         break;
       case 0x52:
